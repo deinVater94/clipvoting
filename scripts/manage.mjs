@@ -36,6 +36,10 @@ async function helix(endpoint, params, credentials) {
 }
 async function verify() {
   const conf=await currentConfig();
+  if (conf.phase !== 'collect') {
+    console.log('Verifizierung ausgesetzt: Clip-Sammlung ist geschlossen.');
+    return;
+  }
   const credentials=await token();
   const users=await helix('users',{login:process.env.TWITCH_CHANNEL_LOGIN || CHANNEL}, credentials);
   const broadcaster=users[0];
@@ -61,7 +65,7 @@ async function verify() {
         return false;
       }
       tx.create(clipRef,{
-        id:clipRef.id,twitchClipId:clip.id,edition:conf.edition,category:s.category,status:'review',
+        id:clipRef.id,twitchClipId:clip.id,edition:conf.edition,category:s.category,status:'approved',
         title:short(clip.title),url:clip.url,thumbnail:clip.thumbnail_url || '',
         creatorId:String(clip.creator_id || ''),creatorName:short(clip.creator_name || 'Unbekannt'),
         broadcasterId:String(clip.broadcaster_id),createdAtTwitch:clip.created_at,
@@ -72,7 +76,7 @@ async function verify() {
     });
     if(made) approved++; else duplicate++;
   }
-  console.log(`Prüfung fertig: ${approved} neu (zur Moderation), ${duplicate} doppelt, ${rejected} abgelehnt; ${pending.size} geprüft`);
+  console.log(`Prüfung fertig: ${approved} neu automatisch freigegeben, ${duplicate} doppelt, ${rejected} abgelehnt; ${pending.size} geprüft`);
   if (pending.size === 300) console.log('Hinweis: Maximal 300 pro Lauf – nächsten Lauf starten für weitere.');
 }
 async function runBatchUpdates(rows, project) {
