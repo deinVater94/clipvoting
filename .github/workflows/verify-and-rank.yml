@@ -1,0 +1,35 @@
+name: Clips prüfen & Voting-Runden abschließen
+on:
+  schedule:
+    - cron: '18 5 * * *'
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'verify = Clip-Einreichungen prüfen, top10 = Swipe beenden, final6 = Finalisten bestimmen, seed = erste Edition erstellen'
+        required: true
+        type: choice
+        default: verify
+        options: [verify, top10, final6, seed]
+permissions:
+  contents: read
+concurrency:
+  group: niki-awards-management
+  cancel-in-progress: false
+jobs:
+  manage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - name: Verifizieren / Finalisieren
+        env:
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          TWITCH_CLIENT_SECRET: ${{ secrets.TWITCH_CLIENT_SECRET }}
+          TWITCH_CHANNEL_LOGIN: niki8einhalb
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          OPERATION: ${{ github.event.inputs.operation || 'verify' }}
+        run: node scripts/manage.mjs "$OPERATION"
