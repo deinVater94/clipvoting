@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0d0916">
+  <meta name="description" content="Niki Clip Awards – Deine Clips, deine Stimmen, Nikis Entscheidung.">
+  <title>NIKI CLIP AWARDS — Community x Niki</title>
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="brand" href="#home"><span class="brand-icon">N<span class="bolt">✦</span></span><span>NIKI<span class="brand-dim">/</span>CLIPS <small>AWARDS</small></span></a>
+      <span class="nav-title">MENÜ</span>
+      <nav id="desktop-nav" aria-label="Hauptnavigation"></nav>
+      <div class="side-bottom"><span class="live-dot"></span> FÜR DIE COMMUNITY<br><small>von Niki8einhalb gemacht ♡</small></div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="mobile-brand">N<span>✦</span> CLIP AWARDS</div>
+        <div class="edition-chip" id="edition-chip">EDITION WIRD GELADEN</div>
+        <div class="top-actions"><span id="status-chip" class="chip">Verbinde...</span><button class="small-icon" id="info-btn" aria-label="So funktioniert's" title="So funktioniert's">?</button></div>
+      </header>
+      <div id="flash" role="status" aria-live="polite"></div>
+      <section id="view" aria-label="Seiteninhalt"><div class="loading">Die Clips werden geladen ...</div></section>
+      <footer>Made for the Niki Community · Twitch-Clips werden über Twitch abgespielt · <a href="https://www.twitch.tv/niki8einhalb" target="_blank" rel="noreferrer">Niki auf Twitch ↗</a></footer>
+    </main>
+  </div>
+  <nav id="mobile-nav" aria-label="Mobile Navigation"></nav>
+  <dialog id="player-dialog" class="player-dialog"><button class="dialog-close" id="player-close" aria-label="Player schließen">×</button><div id="player-body"></div></dialog>
+  <dialog id="info-dialog" class="info-dialog"><button class="dialog-close" id="info-close" aria-label="Fenster schließen">×</button><h2>So funktionieren die Awards</h2><p>Die Community reicht Clips von Niki ein. Nach einer Prüfung folgen die Swipe-Runde und das Top-3-Voting. Die sechs besten Clips jeder Kategorie kommen in Nikis Stream. Niki bestimmt den Gutschein-Gewinner.</p><p>Ohne sichtbaren Login erhältst du eine anonyme Firebase-ID. Für Preise ist das noch nicht manipulationssicher – Mehrfachkonten bleiben ein Risiko.</p></dialog>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
