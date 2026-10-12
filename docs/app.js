@@ -1,6 +1,6 @@
 // Firebase wird erst im echten Betrieb geladen; der deutlich markierte Demo-Modus
 // funktioniert so ohne externe SDK-Anfragen.
-let initializeApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, signOut;
+let initializeApp, getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, signOut, setPersistence, browserSessionPersistence, browserLocalPersistence, inMemoryPersistence;
 let getFirestore, collection, doc, getDoc, getDocs, query, where, limit, setDoc, updateDoc, serverTimestamp;
 import {firebaseConfig} from './firebase-config.js';
 import {CATEGORIES,category} from './categories.js';
@@ -33,19 +33,27 @@ if(isConfigured){
     import('https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js')
   ]);
   ({initializeApp}=fbApp);
-  ({getAuth,onAuthStateChanged,signInAnonymously,signInWithEmailAndPassword,signOut}=fbAuth);
+  ({getAuth,onAuthStateChanged,signInAnonymously,signInWithEmailAndPassword,signOut,setPersistence,browserSessionPersistence,browserLocalPersistence,inMemoryPersistence}=fbAuth);
   ({getFirestore,collection,doc,getDoc,getDocs,query,where,limit,setDoc,updateDoc,serverTimestamp}=fbDb);
   const app=initializeApp(firebaseConfig);auth=getAuth(app);db=getFirestore(app);
+  // Anonyme Stimmen bleiben lokal für die Browserkennung gespeichert.
+  // Nur Team-Logins erhalten die kürzere Browser-Tab-Persistenz.
 }
-const state={page:'home',demo:!isConfigured,config:{edition:'DEMO',phase:'collect',prizeLabel:'Shop-Gutschein',prizeAmount:'noch offen'},clips:[],submissions:[],swipes:new Map(),top3:new Map(),winners:[],currentUser:null,isAdmin:false,swipeCategory:'laugh',top3Category:'laugh',filter:'all',picks:[],loading:false,showIndex:0};
+const state={page:(new URLSearchParams(window.location.search).get('team')==='login'||window.location.hash==='#team-login'?'admin-login':'home'),authReady:!isConfigured,demo:!isConfigured,config:{edition:'DEMO',phase:'collect',prizeLabel:'Shop-Gutschein',prizeAmount:'noch offen'},clips:[],submissions:[],swipes:new Map(),top3:new Map(),winners:[],currentUser:null,isAdmin:false,swipeCategory:'laugh',top3Category:'laugh',filter:'all',picks:[],loading:false,showIndex:0};
 const demoVotes=(()=>{try{return JSON.parse(localStorage.getItem('niki_demo_swipes_v3')||'{}');}catch{return {};}})();
 state.clips=state.demo?demoClips:[];
 const isValidPhase=phase=>['collect','swipe','top3','show','archived'].includes(phase);
 function notify(message,error=false){const el=$('#flash');el.textContent=message;el.className=error?'error':'';el.style.display='block';window.clearTimeout(notify.timeout);notify.timeout=window.setTimeout(()=>{el.style.display='none';},7500);}
-function canUse(page){return !['admin','show'].includes(page)||state.isAdmin;}
-function navTo(page){if(!canUse(page))page='admin-login';state.page=page;if(page==='top3')state.picks=[];render();window.scrollTo({top:0,behavior:'smooth'});}
+function canUse(page){return !['admin','show'].includes(page)||(state.authReady&&state.isAdmin);}
+function navTo(page){if(!canUse(page))page='home';state.page=page;if(page==='top3')state.picks=[];render();window.scrollTo({top:0,behavior:'smooth'});}
 function chip(text){return `<span class="pill">${esc(text)}</span>`;}
-function renderNav(){const list=[...NAV,...(state.isAdmin?[['show','▶','Show-Modus'],['admin','⚙','Administration']]:[])];$('#desktop-nav').innerHTML=list.map(([page,icon,text])=>`<button class="nav ${state.page===page?'active':''}" data-action="go" data-page="${page}"><span>${icon}</span>${text}</button>`).join('');const mobile=[...NAV.slice(0,4),...(state.isAdmin?[['admin','⚙','Admin']]:[])];$('#mobile-nav').innerHTML=mobile.map(([page,icon,text])=>`<button class="${state.page===page?'active':''}" data-action="go" data-page="${page}"><span>${icon}</span>${esc(text)}</button>`).join('');}
+function renderNav(){
+  const admin=state.authReady&&state.isAdmin;
+  const list=[...NAV,...(admin?[['show','▶','Show-Modus'],['admin','⚙','Administration']]:[])];
+  $('#desktop-nav').innerHTML=list.map(([page,icon,text])=>`<button class="nav ${state.page===page?'active':''}" data-action="go" data-page="${page}"><span>${icon}</span>${esc(text)}</button>`).join('')+(admin?'<button class="nav" data-action="logout"><span>⎋</span> Abmelden</button>':'');
+  const mobile=[...NAV.slice(0,4),...(admin?[['admin','⚙','Admin'],['show','▶','Show']]:[])];
+  $('#mobile-nav').innerHTML=mobile.map(([page,icon,text])=>`<button class="${state.page===page?'active':''}" data-action="go" data-page="${page}"><span>${icon}</span>${esc(text)}</button>`).join('')+(admin?'<button data-action="logout">Abmelden</button>':'');
+}
 function sectionHead(title,note=''){return `<div class="section-bar"><h2>${title}</h2>${note?chip(note):''}</div>`;}
 function notice(text,good=false){return `<div class="notice ${good?'good-note':''}">${text}</div>`;}
 function categoriesHtml(){return `<div class="category-grid">${CATEGORIES.map(c=>`<button class="category-card" data-action="category-swipe" data-cat="${c.id}"><span class="emoji">${c.icon}</span><strong>${esc(c.title)}</strong><small>${esc(c.subtitle)}</small></button>`).join('')}</div>`;}
@@ -58,7 +66,7 @@ function home(){let count=state.clips.length;return `<div class="hero"><div clas
   ${state.demo?notice('<strong>Layout-Vorschau:</strong> Firebase ist noch nicht eingerichtet. Die gezeigten Titel sind erfundene Demo-Clips; Stimmen sind nur lokal in deinem Browser gespeichert.'):notice('<strong>Aktuelle Phase:</strong> '+esc(PHASE_NAMES[state.config.phase]||state.config.phase)+' – '+esc(phaseHelp()),true)}
   <section class="section">${sectionHead('Fünf Kategorien','5 AWARDS')}${categoriesHtml()}</section>
   <section class="section">${sectionHead('So läuft\'s ab')}<div class="two-col"><div class="panel"><span class="tag">01 — Die Community</span><h3>Einreichen, swipen, Top 3 wählen.</h3><p>Nur Twitch-Clips von Niki. Die zehn Favoriten pro Kategorie treten in Runde 2 gegeneinander an. Sechs schaffen es in die Show.</p></div><div class="panel"><span class="tag">02 — Der Stream</span><h3>Niki hat das letzte Wort.</h3><p>Er schaut sich die Finalisten an und entscheidet pro Kategorie über genau einen Gewinner. Der ursprüngliche Clip-Ersteller erhält einen Gutschein.</p></div></div></section>
-  <section class="section">${sectionHead('Clip-Vorschau','AUS DER COMMUNITY')}<div class="clip-grid">${state.clips.slice(0,3).map(clipCard).join('')||'<div class="empty">Noch keine freigegebenen Clips. Reiche den ersten ein!</div>'}</div></section><div style="margin-top:32px"><button class="btn secondary small" data-action="go" data-page="admin-login">Team-Zugang</button></div>`;}
+  <section class="section">${sectionHead('Clip-Vorschau','AUS DER COMMUNITY')}<div class="clip-grid">${state.clips.slice(0,3).map(clipCard).join('')||'<div class="empty">Noch keine freigegebenen Clips. Reiche den ersten ein!</div>'}</div></section>`;}
 function submitPage(){const open=state.config.phase==='collect'||state.demo;return `<div class="page-head"><div class="eyebrow">DEIN MOMENT FÜR DIE SHOW</div><h1>CLIP EINREICHEN.</h1><p>Du hast einen legendären Niki-Moment gefunden? Schick uns den Twitch-Clip-Link und wähle eine Award-Kategorie. Eine Anmeldung ist dafür nicht nötig.</p></div><div class="two-col"><div class="panel"><h2>Einreichung</h2>${state.demo?notice('Demo-Modus: Formular ist sichtbar, sendet aber keine Daten.'):''}${!open?notice('Die Einreichungsphase ist beendet. Neue Clips können erst in der nächsten Edition eingereicht werden.'):''}<form id="submit-form" class="stack"><div class="field"><label for="clip-url">Twitch-Clip-Link</label><input class="input" id="clip-url" name="url" type="url" required placeholder="https://clips.twitch.tv/DeinClip" maxlength="350" ${!open?'disabled':''}><small>Nur öffentlich verfügbare Clips von twitch.tv/niki8einhalb. Die Prüfung erfolgt über die Twitch-API.</small></div><div class="field"><label for="submit-cat">Kategorie</label><select class="select" id="submit-cat" name="category" ${!open?'disabled':''}>${categoryOptions('laugh')}</select></div><div class="field"><button class="btn" ${!open?'disabled':''}>↥ Clip zur Prüfung einreichen</button><small>Maximal fünf Einreichungen pro anonymer Firebase-ID und Edition. Die endgültige Freigabe übernimmt das Team.</small></div></form></div><div class="panel"><h3>Wichtig zu wissen</h3><p>Der Gutschein geht an den <strong>ursprünglichen Twitch-Clip-Ersteller</strong>, nicht an denjenigen, der den Clip-Link einreicht.</p><p>Die Einreichungen werden nur nach Prüfung sichtbar. Doppelte Links werden zusammengeführt. Die Clips müssen aus der aktuellen Edition stammen (UTC-Monat).</p><p>Wir laden keine Videodateien hoch. Die Videos bleiben auf Twitch und werden dort abgespielt.</p></div></div>`;}
 function orderedClips(cat){let items=state.clips.filter(c=>c.category===cat&&c.status==='approved');const key=(s)=>{let h=2166136261;for(const c of s)h=Math.imul(h^c.charCodeAt(0),16777619);return h>>>0;};const seed=state.currentUser?.uid||'demo-'+(localStorage.getItem('niki_demo_seed')||'preview');return items.sort((a,b)=>key(seed+':'+a.id)-key(seed+':'+b.id));}
 function getSeen(c){return state.demo?demoVotes[c.id]:state.swipes.get(c.id)?.choice;}
@@ -69,7 +77,16 @@ function resultsPage(){const ready=['show','archived'].includes(state.config.pha
 function adminLoginPage(){return `<div class="page-head"><div class="eyebrow">GESCHÜTZTER BEREICH</div><h1>TEAM-ZUGANG.</h1><p>Dieser Bereich ist nur für freigeschaltete Accounts. Die Admin-Funktionen sind zusätzlich durch Firestore-Regeln geschützt.</p></div><div class="panel" style="max-width:520px">${state.isAdmin?notice('Du bist als Admin angemeldet.',true):''}${state.demo?notice('Im Demo-Modus ist noch kein Login verfügbar. Firebase zuerst einrichten.'):''}<form id="login-form" class="stack"><div class="field"><label for="admin-email">E-Mail des freigeschalteten Firebase-Admin-Kontos</label><input class="input" id="admin-email" type="email" autocomplete="username" required ${state.demo?'disabled':''}></div><div class="field"><label for="admin-password">Passwort</label><input class="input" id="admin-password" type="password" autocomplete="current-password" required ${state.demo?'disabled':''}></div><button class="btn" ${state.demo?'disabled':''}>Sicher anmelden</button></form><p style="font-size:12px">Für den MVP nutzt Niki Firebase E-Mail/Passwort statt Twitch-Login. Erst die serverseitig freigeschaltete Firebase-UID erhält Adminrechte.</p></div>`;}
 function showPage(){if(!state.isAdmin)return adminLoginPage();const finalists=state.clips.filter(c=>c.finalist&&c.status==='approved').sort((a,b)=>CATEGORIES.findIndex(x=>x.id===a.category)-CATEGORIES.findIndex(x=>x.id===b.category)||(b.finalPoints||0)-(a.finalPoints||0));if(!finalists.length)return `<div class="page-head"><h1>SHOW-MODUS.</h1></div><div class="empty">Noch keine Finalisten. Starte nach der Top-3-Runde in GitHub Actions den Workflow „final6“.</div>`;const c=finalists[state.showIndex%finalists.length];const winner=state.winners.find(w=>w.category===c.category&&w.edition===state.config.edition);return `<div class="page-head"><div class="eyebrow">NUR FÜR DAS TEAM</div><h1>SHOW-MODUS.</h1><p>Präsentiere die Community-Finalisten und bestimme deinen Gewinner pro Kategorie.</p></div><div class="show-preview"><div class="row" style="justify-content:space-between">${chip(category(c.category).icon+' '+category(c.category).title)}<span class="status">Finalist ${state.showIndex%finalists.length+1} / ${finalists.length}</span></div><div style="margin:15px 0">${clipThumb(c)}</div><h2>${esc(c.title)}</h2><p>Originaler Twitch-Clip von <strong>@${esc(c.creatorName)}</strong> · ${c.finalPoints||0} Community-Punkte.</p><div class="row"><button class="btn secondary" data-action="play" data-id="${esc(c.id)}" ${!c.url?'disabled':''}>▶ Twitch-Clip öffnen</button><button class="btn gold" data-action="winner" data-id="${esc(c.id)}">★ Zum Kategoriesieger küren</button></div><p>${winner?`Aktueller Sieger dieser Kategorie: <strong>${esc(state.clips.find(x=>x.id===winner.clipId)?.title||winner.clipId)}</strong>`:'Noch kein Sieger für diese Kategorie gewählt.'}</p><div class="row" style="justify-content:space-between;margin-top:25px"><button class="btn secondary" data-action="show-prev">← Zurück</button><button class="btn" data-action="show-next">Nächster Clip →</button></div></div>`;}
 function adminPage(){if(!state.isAdmin)return adminLoginPage();return `<div class="page-head"><div class="eyebrow">NIKI-TEAM</div><h1>ADMIN-DASHBOARD.</h1><p>Moderation, Voting-Start und Gewinnerkontakt. Verifizierung, Top-10-Auswertung und Finalistenfestlegung laufen sicher über GitHub Actions.</p></div><div class="panel"><div class="row" style="justify-content:space-between"><div><h3>Edition ${esc(state.config.edition)}</h3><p>Phase: <strong>${esc(PHASE_NAMES[state.config.phase])}</strong></p></div><div class="row"><button class="btn small secondary" data-action="refresh">↻ Aktualisieren</button><button class="btn small danger" data-action="logout">Logout</button></div></div><div class="row"><button class="btn small" data-action="phase" data-phase="collect">Sammlung öffnen</button><button class="btn small gold" data-action="phase" data-phase="swipe">Swipe-Voting starten</button><button class="btn small secondary" data-action="phase" data-phase="archived">Edition archivieren</button></div><p style="font-size:12px">Die Top-3-Phase und die Show werden durch die GitHub-Actions-Auswertungen „top10“ bzw. „final6“ eröffnet.</p></div><section class="section panel">${sectionHead('Clips freigeben','OFFENE PRÜFUNG')}<div class="slim-list">${state.submissions.length?state.submissions.map(c=>`<div class="listrow"><div class="grow"><strong>${esc(c.title)}</strong><small>${esc(category(c.category).title)} · @${esc(c.creatorName)} · ${esc(c.twitchClipId)}</small></div><button class="btn small secondary" data-action="play" data-id="${esc(c.id)}">▶</button><select class="select" data-action="admin-category" data-id="${esc(c.id)}" ${state.config.phase!=='collect'?'disabled':''} style="max-width:145px" aria-label="Clip-Kategorie ändern">${categoryOptions(c.category)}</select><button class="btn small good" data-action="moderate" data-id="${esc(c.id)}" data-status="approved" ${state.config.phase!=='collect'?'disabled':''}>✓</button><button class="btn small danger" data-action="moderate" data-id="${esc(c.id)}" data-status="rejected" ${state.config.phase!=='collect'?'disabled':''}>✕</button></div>`).join(''):'<p>Keine Clips in der Moderationswarteschlange.</p>'}</div></section><section class="section panel">${sectionHead('Gutscheine & Kontakt','MANUELL')}<div class="slim-list">${CATEGORIES.map(cat=>{const w=state.winners.find(x=>x.category===cat.id&&x.edition===state.config.edition);const c=w&&state.clips.find(x=>x.id===w.clipId);return `<div class="listrow"><div class="grow"><strong>${esc(cat.icon+' '+cat.title)}</strong><small>${c?'@'+esc(c.creatorName)+' · '+esc(c.title):'Noch kein Gewinner gewählt'}</small></div>${w?`<select class="select" data-action="contact" data-cat="${cat.id}" aria-label="Kontaktstatus ${esc(cat.title)}" style="max-width:205px">${['offen','angeschrieben','gutschein übergeben','kontakt nicht möglich'].map(v=>`<option value="${v}" ${w.contactStatus===v?'selected':''}>${v}</option>`).join('')}</select>`:chip('Offen')}</div>`;}).join('')}</div><p style="font-size:12px">Gutscheinversand ist nicht automatisiert. Die ursprünglichen Ersteller werden manuell von Niki auf Twitch kontaktiert.</p></section>`;}
-function render(){if(state.page==='show'&&!state.isAdmin)state.page='home';if(state.page==='admin'&&!state.isAdmin)state.page='admin-login';renderNav();$('#edition-chip').textContent=state.demo?'DEMO / VORSCHAU':state.config.edition+' EDITION';const status=$('#status-chip');status.textContent=state.demo?'DEMO-MODUS':(PHASE_NAMES[state.config.phase]||'Bereit');status.className='chip'+(state.demo?' warn':'');const pages={home,submit:submitPage,swipe:swipePage,top3:top3Page,clips:clipsPage,results:resultsPage,'admin-login':adminLoginPage,admin:adminPage,show:showPage};$('#view').innerHTML=(pages[state.page]||home)();}
+function render(){
+  if(['show','admin'].includes(state.page)&&!canUse(state.page))state.page='home';
+  renderNav();
+  $('#edition-chip').textContent=state.demo?'DEMO / VORSCHAU':state.config.edition+' EDITION';
+  const status=$('#status-chip');
+  status.textContent=state.demo?'DEMO-MODUS':(state.authReady&&state.isAdmin?'Team: '+(state.currentUser?.email||'Admin'):PHASE_NAMES[state.config.phase]||'Bereit');
+  status.className='chip'+(state.demo?' warn':'');
+  const pages={home,submit:submitPage,swipe:swipePage,top3:top3Page,clips:clipsPage,results:resultsPage,'admin-login':adminLoginPage,admin:adminPage,show:showPage};
+  $('#view').innerHTML=(pages[state.page]||home)();
+}
 function findClip(id){return [...state.clips,...state.submissions].find(c=>c.id===id);}
 function play(id){const c=findClip(id);if(!c||!c.url)return;const dlg=$('#player-dialog'),body=$('#player-body'),parent=window.location.hostname||'localhost';const url=`https://clips.twitch.tv/embed?clip=${encodeURIComponent(c.twitchClipId)}&parent=${encodeURIComponent(parent)}&autoplay=false`;body.innerHTML=`<iframe title="Twitch-Clip: ${esc(c.title)}" src="${esc(url)}" allow="autoplay; fullscreen" allowfullscreen loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe><div class="row" style="margin:10px 0"><a class="btn secondary small" target="_blank" rel="noreferrer noopener" href="${esc(safeUrl(c.url))}">Auf Twitch ansehen ↗</a></div>`;dlg.showModal();}
 async function loadAll(){if(state.demo){render();return;}const snap=await getDoc(doc(db,'config','current'));if(!snap.exists)throw new Error('Edition fehlt: GitHub-Action „seed“ ausführen.');state.config=snap.data();const clipsQuery=state.isAdmin?query(collection(db,'clips'),limit(500)):query(collection(db,'clips'),where('status','==','approved'),limit(500));const all=(await getDocs(clipsQuery)).docs.map(x=>({id:x.id,...x.data()}));state.clips=all.filter(c=>c.edition===state.config.edition&&c.status==='approved');if(state.isAdmin){state.submissions=all.filter(c=>c.edition===state.config.edition&&c.status==='review');state.winners=(await getDocs(query(collection(db,'winners'),limit(100)))).docs.map(x=>({id:x.id,...x.data()}));}else{state.submissions=[];state.winners=state.config.phase==='archived'?(await getDocs(query(collection(db,'winners'),limit(100)))).docs.map(x=>({id:x.id,...x.data()})):[];}
@@ -82,13 +99,69 @@ async function adminChange(id,values){if(!state.isAdmin||state.config.phase!=='c
 async function updatePhase(phase){if(!state.isAdmin||!['collect','swipe','archived'].includes(phase))return;const yes=confirm(`Phase wirklich auf „${PHASE_NAMES[phase]}“ setzen?`);if(!yes)return;await updateDoc(doc(db,'config','current'),{phase,updatedAt:serverTimestamp()});await loadAll();notify('Phase aktualisiert.');}
 async function chooseWinner(id){const c=findClip(id);if(!state.isAdmin||!c?.finalist||!['show','archived'].includes(state.config.phase))return notify('Nur Finalisten dürfen gewinnen.',true);if(!confirm(`„${c.title}“ zum Sieger von „${category(c.category).title}“ küren?`))return;const ref=doc(db,'winners',state.config.edition+'__'+c.category);const existing=state.winners.find(w=>w.category===c.category);await setDoc(ref,{edition:state.config.edition,category:c.category,clipId:c.id,creatorId:c.creatorId||'',creatorName:c.creatorName,contactStatus:existing?.clipId===id?existing.contactStatus:'offen',selectedAt:serverTimestamp()});await loadAll();notify('Kategoriesieger gespeichert. Gutschein wird manuell verschickt.');}
 async function updateContact(cat,status){if(!state.isAdmin)return;await updateDoc(doc(db,'winners',state.config.edition+'__'+cat),{contactStatus:status});await loadAll();notify('Kontaktstatus gespeichert.');}
-async function authLogin(e){e.preventDefault();if(!auth)return;const email=$('#admin-email').value.trim(),pw=$('#admin-password').value;await signInWithEmailAndPassword(auth,email,pw);if(!state.isAdmin)notify('Anmeldung erfolgt. Adminrechte werden überprüft.');}
-async function logout(){if(!auth)return;await signOut(auth);navTo('home');}
+async function authLogin(e){
+  e.preventDefault();if(!auth)return;
+  const email=$('#admin-email').value.trim(),pw=$('#admin-password').value;
+  // Login gilt nur bis zum Schließen des Tabs; andere, anonyme Nutzer bleiben LOCAL.
+  try{await setPersistence(auth,browserSessionPersistence);}
+  catch{await setPersistence(auth,inMemoryPersistence);}
+  const result=await signInWithEmailAndPassword(auth,email,pw);
+  // Nur ein bestätigter Passwort-Account MIT expliziter Rolle in Firestore ist Admin.
+  const adminDoc=await getDoc(doc(db,'admins',result.user.uid));
+  if(result.user.isAnonymous||!result.user.providerData.some(p=>p.providerId==='password')||!adminDoc.exists()||adminDoc.data()?.role!=='admin'){
+    await signOut(auth);
+    notify('Dieses Firebase-Konto hat keine Adminberechtigung.',true);
+    return;
+  }
+  notify('Team-Anmeldung erfolgreich.');
+}
+async function logout(){
+  if(!auth)return;
+  state.isAdmin=false;state.currentUser=null;state.authReady=false;
+  state.submissions=[];state.winners=[];state.swipes=new Map();state.top3=new Map();
+  state.page='home';render();
+  await signOut(auth);
+  notify('Du wurdest abgemeldet.');
+}
 
 document.addEventListener('click',e=>{const el=e.target.closest('[data-action]');if(!el)return;const {action,page,id,choice,cat,index,phase,status}=el.dataset;withError(async()=>{if(action==='go')navTo(page);if(action==='category-swipe'){state.swipeCategory=cat;navTo('swipe');}if(action==='play')play(id);if(action==='swipe')await swipe(id,choice);if(action==='pick'&&!state.picks.includes(id)&&state.picks.length<3){state.picks.push(id);render();}if(action==='unpick'){state.picks.splice(Number(index),1);render();}if(action==='save-top3')await saveTop3();if(action==='moderate')await adminChange(id,{status});if(action==='phase')await updatePhase(phase);if(action==='refresh')await loadAll();if(action==='winner')await chooseWinner(id);if(action==='show-next'){state.showIndex++;render();}if(action==='show-prev'){state.showIndex=Math.max(0,state.showIndex-1);render();}if(action==='logout')await logout();});});
 document.addEventListener('change',e=>{const t=e.target;withError(async()=>{if(t.id==='swipe-category'){state.swipeCategory=t.value;render();}if(t.id==='top3-category'){state.top3Category=t.value;state.picks=[];render();}if(t.id==='clip-filter'){state.filter=t.value;render();}if(t.dataset.action==='admin-category')await adminChange(t.dataset.id,{category:t.value,top10:false,finalist:false});if(t.dataset.action==='contact')await updateContact(t.dataset.cat,t.value);});});
 document.addEventListener('submit',e=>{if(e.target.id==='submit-form')withError(()=>submit(e));if(e.target.id==='login-form')withError(()=>authLogin(e));});
 $('#player-close').addEventListener('click',()=>$('#player-dialog').close());$('#player-dialog').addEventListener('close',()=>{$('#player-body').innerHTML='';});$('#info-btn').addEventListener('click',()=>$('#info-dialog').showModal());$('#info-close').addEventListener('click',()=>$('#info-dialog').close());
 if(state.demo){render();}else{
-  onAuthStateChanged(auth,async user=>{if(!user){try{await signInAnonymously(auth);}catch(e){notify('Firebase Auth: Anonymes Anmelden einschalten. '+e.message,true);}return;}state.currentUser=user;try{state.isAdmin=(await getDoc(doc(db,'admins',user.uid))).exists;await loadAll();if(state.isAdmin&&state.page==='admin-login')navTo('admin');else if(!state.isAdmin&&['admin','show'].includes(state.page))navTo('home');}catch(e){console.error(e);notify('Firebase noch nicht bereit: '+e.message,true);render();}});
+  onAuthStateChanged(auth,async user=>{
+    // Sicherheit: Privilegierte Inhalte beim Auth-Wechsel immer SOFORT löschen.
+    state.isAdmin=false;state.currentUser=null;state.authReady=false;
+    state.submissions=[];state.winners=[];state.swipes=new Map();state.top3=new Map();
+    if(!user){
+      state.clips=[];render();
+      try{
+        await setPersistence(auth,browserLocalPersistence);
+        await signInAnonymously(auth);
+      }catch(e){notify('Firebase Auth: Anonymes Anmelden einschalten. '+e.message,true);}
+      return;
+    }
+    state.currentUser=user;
+    try{
+      // Anonyme Nutzer erhalten selbst bei versehentlich angelegtem Admin-Dokument keine Rechte.
+      if(!user.isAnonymous && user.providerData.some(p=>p.providerId==='password')){
+        // Migriert auch zuvor lokal gespeicherte Admin-Sessions auf Tab-Persistenz.
+        try{await setPersistence(auth,browserSessionPersistence);}
+        catch{await setPersistence(auth,inMemoryPersistence);}
+        const record=await getDoc(doc(db,'admins',user.uid));
+        if(auth.currentUser?.uid!==user.uid)return;
+        state.isAdmin=record.exists()&&record.data()?.role==='admin';
+      }
+      state.authReady=true;
+      await loadAll();
+      if(auth.currentUser?.uid!==user.uid)return;
+      if(state.isAdmin&&state.page==='admin-login')navTo('admin');
+      else if(!state.isAdmin&&['admin','show'].includes(state.page))navTo('home');
+    }catch(e){
+      if(auth.currentUser?.uid!==user.uid)return;
+      state.isAdmin=false;state.authReady=true;
+      state.submissions=[];state.winners=[];
+      console.error(e);notify('Firebase noch nicht bereit: '+e.message,true);render();
+    }
+  });
 }
