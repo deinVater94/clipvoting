@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+    function current() {
+      return get(/databases/$(database)/documents/config/current).data;
+    }
+    function validCat(cat) { return cat in ['laugh','iq','random','rage','cinema']; }
+    function approvedClip(clipId, edition, category) {
+      let ref = /databases/$(database)/documents/clips/$(clipId);
+      return exists(ref) && get(ref).data.status == 'approved' &&
+        get(ref).data.edition == edition && get(ref).data.category == category;
+    }
+    function topClip(clipId, edition, category) {
+      let ref = /databases/$(database)/documents/clips/$(clipId);
+      return approvedClip(clipId, edition, category) && get(ref).data.top10 == true;
+    }
+    match /config/current {
+      allow read: if true;
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+    match /admins/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow write: if false; // nur Admin SDK per sicherem Workflow
+    }
+    match /submissions/{sid} {
+      allow create: if signedIn() && current().phase == 'collect' &&
+        request.resource.data.keys().hasOnly(['edition','clipId','category','url','submitterUid','slot','status','submittedAt']) &&
+        request.resource.data.keys().hasAll(['edition','clipId','category','url','submitterUid','slot','status','submittedAt']) &&
+        request.resource.data.edition == current().edition &&
+        request.resource.data.submitterUid == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.slot is int && request.resource.data.slot >= 0 && request.resource.data.slot < 5 &&
+        sid == current().edition + '__' + request.auth.uid + '__' + string(request.resource.data.slot) &&
+        request.resource.data.clipId is string && request.resource.data.clipId.size() >= 3 && request.resource.data.clipId.size() <= 120 &&
+        request.resource.data.url is string && request.resource.data.url.size() <= 350 &&
+        validCat(request.resource.data.category) &&
+        request.resource.data.submittedAt == request.time;
+      allow get: if isAdmin() || (signedIn() && sid.matches('^' + current().edition + '__' + request.auth.uid + '__[0-4]$'));
+      allow list: if isAdmin();
+      allow update, delete: if false; // Verifizierung nur Admin SDK
+    }
+    match /clips/{clipId} {
+      allow get: if isAdmin() || resource.data.status == 'approved';
+      allow list: if isAdmin() || (request.query.limit <= 500 && resource.data.status == 'approved');
+      allow create, update, delete: if isAdmin();
+      // Clip-Import & Ergebnisse werden normalerweise vom vertrauenswürdigen Action-Job geschrieben.
+    }
+    match /swipes/{voteId} {
+      allow create: if signedIn() && current().phase == 'swipe' &&
+        request.resource.data.keys().hasOnly(['uid','edition','clipId','category','choice','createdAt']) &&
+        request.resource.data.keys().hasAll(['uid','edition','clipId','category','choice','createdAt']) &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.edition == current().edition &&
+        validCat(request.resource.data.category) &&
+        request.resource.data.choice in ['like','skip'] &&
+        voteId == current().edition + '__' + request.auth.uid + '__' + request.resource.data.clipId &&
+        approvedClip(request.resource.data.clipId, request.resource.data.edition, request.resource.data.category) &&
+        request.resource.data.createdAt == request.time;
+      allow get: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow list: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow update, delete: if false;
+    }
+    match /top3Votes/{voteId} {
+      allow create: if signedIn() && current().phase == 'top3' &&
+        request.resource.data.keys().hasOnly(['uid','edition','category','picks','createdAt']) &&
+        request.resource.data.keys().hasAll(['uid','edition','category','picks','createdAt']) &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.edition == current().edition &&
+        validCat(request.resource.data.category) &&
+        voteId == current().edition + '__' + request.resource.data.category + '__' + request.auth.uid &&
+        request.resource.data.picks is list && request.resource.data.picks.size() == 3 &&
+        request.resource.data.picks[0] != request.resource.data.picks[1] &&
+        request.resource.data.picks[0] != request.resource.data.picks[2] &&
+        request.resource.data.picks[1] != request.resource.data.picks[2] &&
+        topClip(request.resource.data.picks[0], request.resource.data.edition, request.resource.data.category) &&
+        topClip(request.resource.data.picks[1], request.resource.data.edition, request.resource.data.category) &&
+        topClip(request.resource.data.picks[2], request.resource.data.edition, request.resource.data.category) &&
+        request.resource.data.createdAt == request.time;
+      allow get: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow list: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow update, delete: if false;
+    }
+    match /winners/{winId} {
+      allow read: if isAdmin() || current().phase == 'archived';
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}
