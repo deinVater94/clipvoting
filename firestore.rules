@@ -2,13 +2,37 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function isAdmin() {
-      // Nicht allein auf eine existierende UID vertrauen: nur Passwort-Accounts
-      // mit explizitem Adminrollen-Feld (auch im direkten Datenbankzugriff).
-      return signedIn() &&
-        request.auth.token.firebase.sign_in_provider == 'password' &&
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin';
+    function passwordAccount() {
+      return signedIn() && request.auth.token.firebase.sign_in_provider == 'password';
+    }
+    function teamRef() {
+      return /databases/$(database)/documents/admins/$(request.auth.uid);
+    }
+    function isOwner() {
+      return passwordAccount() && exists(teamRef()) && get(teamRef()).data.role == 'owner';
+    }
+    function isModerator() {
+      return passwordAccount() && exists(teamRef()) && get(teamRef()).data.role == 'moderator';
+    }
+    function isTeam() { return isOwner() || isModerator(); }
+    function canModerate() {
+      return isOwner() || (isModerator() && get(teamRef()).data.permissions.moderateClips == true);
+    }
+    function canManagePhases() {
+      return isOwner() || (isModerator() && get(teamRef()).data.permissions.managePhases == true);
+    }
+    function validModerator() {
+      return request.resource.data.keys().hasOnly(['role','email','permissions','createdBy','createdAt']) &&
+        request.resource.data.keys().hasAll(['role','email','permissions','createdBy','createdAt']) &&
+        request.resource.data.role == 'moderator' &&
+        request.resource.data.email is string && request.resource.data.email.size() >= 3 &&
+        request.resource.data.email.size() <= 254 &&
+        request.resource.data.permissions is map &&
+        request.resource.data.permissions.keys().hasOnly(['moderateClips','managePhases']) &&
+        request.resource.data.permissions.keys().hasAll(['moderateClips','managePhases']) &&
+        request.resource.data.permissions.moderateClips is bool &&
+        request.resource.data.permissions.managePhases is bool &&
+        request.resource.data.createdBy == request.auth.uid;
     }
     function current() {
       return get(/databases/$(database)/documents/config/current).data;
@@ -25,13 +49,26 @@ service cloud.firestore {
     }
     match /config/current {
       allow read: if true;
-      allow create, update: if isAdmin();
+      allow create: if isOwner();
+      allow update: if isOwner() ||
+        (canManagePhases() &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['phase','updatedAt']) &&
+         request.resource.data.phase in ['collect','swipe','archived']);
       allow delete: if false;
     }
     match /admins/{uid} {
-      allow get: if signedIn() && request.auth.token.firebase.sign_in_provider == 'password' && (request.auth.uid == uid || isAdmin());
-      allow list: if isAdmin();
-      allow write: if false; // nur Admin SDK per sicherem Workflow
+      allow get: if passwordAccount() && (request.auth.uid == uid || isOwner());
+      allow list: if isOwner();
+      // Niki (owner) kann NUR Moderatorrollen anlegen/verwalten,
+      // niemals eine zweite owner-Rolle oder seine eigene Rolle umschreiben.
+      allow create: if isOwner() && uid != request.auth.uid && validModerator() &&
+        request.resource.data.createdAt == request.time;
+      allow update: if isOwner() && resource.data.role == 'moderator' &&
+        validModerator() &&
+        request.resource.data.email == resource.data.email &&
+        request.resource.data.createdBy == resource.data.createdBy &&
+        request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isOwner() && resource.data.role == 'moderator';
     }
     match /submissions/{sid} {
       allow create: if signedIn() && current().phase == 'collect' &&
@@ -46,15 +83,27 @@ service cloud.firestore {
         request.resource.data.url is string && request.resource.data.url.size() <= 350 &&
         validCat(request.resource.data.category) &&
         request.resource.data.submittedAt == request.time;
-      allow get: if isAdmin() || (signedIn() && sid.matches('^' + current().edition + '__' + request.auth.uid + '__[0-4]$'));
-      allow list: if isAdmin();
+      allow get: if canModerate() || (signedIn() && sid.matches('^' + current().edition + '__' + request.auth.uid + '__[0-4]$'));
+      allow list: if canModerate();
       allow update, delete: if false; // Verifizierung nur Admin SDK
     }
     match /clips/{clipId} {
-      allow get: if isAdmin() || resource.data.status == 'approved';
-      allow list: if isAdmin() || (request.query.limit <= 500 && resource.data.status == 'approved');
-      allow create, update, delete: if isAdmin();
-      // Clip-Import & Ergebnisse werden normalerweise vom vertrauenswürdigen Action-Job geschrieben.
+      allow get: if canModerate() || resource.data.status == 'approved';
+      allow list: if canModerate() ||
+        (request.query.limit <= 500 && resource.data.status == 'approved');
+      allow create: if isOwner(); // automatische Importe: nur GitHub Action/Admin SDK
+      allow update: if isOwner() || (canModerate() && resource.data.edition == current().edition && (
+        // Clip sperren jederzeit; nur während der Sammlung freigeben.
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
+         request.resource.data.status in ['approved','rejected'] &&
+         (request.resource.data.status == 'rejected' || current().phase == 'collect')) ||
+        // Kategorien nur vor Votingbeginn korrigieren.
+        (current().phase == 'collect' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['category','top10','finalist']) &&
+         validCat(request.resource.data.category) &&
+         request.resource.data.top10 == false && request.resource.data.finalist == false)
+      ));
+      allow delete: if isOwner();
     }
     match /swipes/{voteId} {
       allow create: if signedIn() && current().phase == 'swipe' &&
@@ -67,8 +116,8 @@ service cloud.firestore {
         voteId == current().edition + '__' + request.auth.uid + '__' + request.resource.data.clipId &&
         approvedClip(request.resource.data.clipId, request.resource.data.edition, request.resource.data.category) &&
         request.resource.data.createdAt == request.time;
-      allow get: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
-      allow list: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow get: if isOwner() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow list: if isOwner() || (signedIn() && resource.data.uid == request.auth.uid);
       allow update, delete: if false;
     }
     match /top3Votes/{voteId} {
@@ -87,13 +136,13 @@ service cloud.firestore {
         topClip(request.resource.data.picks[1], request.resource.data.edition, request.resource.data.category) &&
         topClip(request.resource.data.picks[2], request.resource.data.edition, request.resource.data.category) &&
         request.resource.data.createdAt == request.time;
-      allow get: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
-      allow list: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow get: if isOwner() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow list: if isOwner() || (signedIn() && resource.data.uid == request.auth.uid);
       allow update, delete: if false;
     }
     match /winners/{winId} {
-      allow read: if isAdmin() || current().phase == 'archived';
-      allow create, update: if isAdmin();
+      allow read: if isOwner() || current().phase == 'archived';
+      allow create, update: if isOwner();
       allow delete: if false;
     }
     match /{document=**} { allow read, write: if false; }
