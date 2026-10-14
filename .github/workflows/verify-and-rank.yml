@@ -5,11 +5,11 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: 'verify = Clip-Einreichungen prüfen, top10 = Swipe beenden, final6 = Finalisten bestimmen, seed = erste Edition erstellen'
+        description: 'verify = Clips prüfen, backfill = vorhandene Clips gegen Duplikate sichern, top10 = Swipe beenden, final6 = Finalisten bestimmen, seed = erste Edition erstellen'
         required: true
         type: choice
         default: verify
-        options: [verify, top10, final6, seed]
+        options: [verify, backfill, top10, final6, seed]
 permissions:
   contents: read
 concurrency:
