@@ -70,6 +70,27 @@ service cloud.firestore {
         request.resource.data.createdAt == resource.data.createdAt;
       allow delete: if isOwner() && resource.data.role == 'moderator';
     }
+    // Jede Twitch-Clip-ID kann je Edition nur einmal reserviert werden.
+    // 'get' ist für die Transaktion nötig; 'list' bleibt gesperrt.
+    match /submissionClaims/{claimId} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn() && current().phase == 'collect' &&
+        request.resource.data.keys().hasOnly(['edition','clipId','slot','claimedAt']) &&
+        request.resource.data.keys().hasAll(['edition','clipId','slot','claimedAt']) &&
+        request.resource.data.edition == current().edition &&
+        request.resource.data.clipId is string &&
+        request.resource.data.clipId.matches('^[A-Za-z0-9_-]{3,120}$') &&
+        claimId == current().edition + '__' + request.resource.data.clipId &&
+        request.resource.data.slot is int &&
+        request.resource.data.slot >= 0 && request.resource.data.slot < 5 &&
+        request.resource.data.claimedAt == request.time &&
+        !exists(/databases/$(database)/documents/clips/$(claimId)) &&
+        getAfter(/databases/$(database)/documents/submissions/$(current().edition + '__' + request.auth.uid + '__' + string(request.resource.data.slot))).data.clipId == request.resource.data.clipId &&
+        getAfter(/databases/$(database)/documents/submissions/$(current().edition + '__' + request.auth.uid + '__' + string(request.resource.data.slot))).data.submitterUid == request.auth.uid &&
+        getAfter(/databases/$(database)/documents/submissions/$(current().edition + '__' + request.auth.uid + '__' + string(request.resource.data.slot))).data.submittedAt == request.time;
+      allow update, delete: if false;
+    }
     match /submissions/{sid} {
       allow create: if signedIn() && current().phase == 'collect' &&
         request.resource.data.keys().hasOnly(['edition','clipId','category','url','submitterUid','slot','status','submittedAt']) &&
@@ -82,7 +103,10 @@ service cloud.firestore {
         request.resource.data.clipId is string && request.resource.data.clipId.size() >= 3 && request.resource.data.clipId.size() <= 120 &&
         request.resource.data.url is string && request.resource.data.url.size() <= 350 &&
         validCat(request.resource.data.category) &&
-        request.resource.data.submittedAt == request.time;
+        request.resource.data.submittedAt == request.time &&
+        !exists(/databases/$(database)/documents/clips/$(current().edition + '__' + request.resource.data.clipId)) &&
+        getAfter(/databases/$(database)/documents/submissionClaims/$(current().edition + '__' + request.resource.data.clipId)).data.slot == request.resource.data.slot &&
+        getAfter(/databases/$(database)/documents/submissionClaims/$(current().edition + '__' + request.resource.data.clipId)).data.claimedAt == request.time;
       allow get: if canModerate() || (signedIn() && sid.matches('^' + current().edition + '__' + request.auth.uid + '__[0-4]$'));
       allow list: if canModerate();
       allow update, delete: if false; // Verifizierung nur Admin SDK
@@ -109,7 +133,6 @@ service cloud.firestore {
       allow create: if signedIn() && current().phase == 'swipe' &&
         request.resource.data.keys().hasOnly(['uid','edition','clipId','category','choice','createdAt']) &&
         request.resource.data.keys().hasAll(['uid','edition','clipId','category','choice','createdAt']) &&
-        request.resource.data.uid == request.auth.uid &&
         request.resource.data.edition == current().edition &&
         validCat(request.resource.data.category) &&
         request.resource.data.choice in ['like','skip'] &&
@@ -124,7 +147,6 @@ service cloud.firestore {
       allow create: if signedIn() && current().phase == 'top3' &&
         request.resource.data.keys().hasOnly(['uid','edition','category','picks','createdAt']) &&
         request.resource.data.keys().hasAll(['uid','edition','category','picks','createdAt']) &&
-        request.resource.data.uid == request.auth.uid &&
         request.resource.data.edition == current().edition &&
         validCat(request.resource.data.category) &&
         voteId == current().edition + '__' + request.resource.data.category + '__' + request.auth.uid &&
