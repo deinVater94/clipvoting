@@ -34,8 +34,68 @@ async function helix(endpoint, params, credentials) {
   if(!res.ok) throw new Error('Twitch API '+endpoint+' HTTP '+res.status+' '+short(await res.text()));
   return (await res.json()).data || [];
 }
+// Einmalige Bestandsmigration (und idempotente Sicherung bei weiteren verify-Läufen):
+// reserviert alle bereits bekannten Clip-IDs der aktiven Edition. Vorher konnten
+// derselbe Clip und verschiedene Kategorien mehrfach pending angelegt werden.
+async function backfillClaims(config = null) {
+  const conf=config || await currentConfig();
+  const [subSnap, clipSnap]=await Promise.all([
+    db.collection('submissions').where('edition','==',conf.edition).get(),
+    db.collection('clips').where('edition','==',conf.edition).get()
+  ]);
+  const groups=new Map();
+  for (const row of subSnap.docs) {
+    const s=row.data();
+    if (parseClipId(s.url)!==s.clipId || !/^[A-Za-z0-9_-]{3,120}$/.test(s.clipId||'')) continue;
+    if (!groups.has(s.clipId)) groups.set(s.clipId,[]);
+    groups.get(s.clipId).push({ref:row.ref,id:row.id,...s});
+  }
+  const clipIds=new Set([...groups.keys()]);
+  for (const clip of clipSnap.docs) {
+    const id=clip.data().twitchClipId;
+    if (typeof id==='string' && /^[A-Za-z0-9_-]{3,120}$/.test(id)) clipIds.add(id);
+  }
+  let claimsAdded=0, legacyDuplicates=0;
+  for(const clipId of clipIds) {
+    const entries=(groups.get(clipId)||[]).sort((a,b)=> {
+      const priority={verified:0,pending:1,duplicate:2,rejected:3};
+      const pa=priority[a.status]??4,pb=priority[b.status]??4;
+      return pa-pb || (a.submittedAt?.toMillis?.()||0)-(b.submittedAt?.toMillis?.()||0) || a.id.localeCompare(b.id);
+    });
+    const preferred=entries[0];
+    const claimRef=db.doc(`submissionClaims/${conf.edition}__${clipId}`);
+    const result=await db.runTransaction(async tx=>{
+      const old=await tx.get(claimRef);
+      const oldData=old.exists?old.data():null;
+      const originalClaim=oldData && entries.find(row =>
+        row.slot===oldData.slot &&
+        oldData.claimedAt?.isEqual?.(row.submittedAt)===true
+      );
+      const selected=originalClaim?.id || preferred?.id || '';
+      if(!old.exists){
+        tx.create(claimRef,{
+          edition:conf.edition, clipId,
+          slot:preferred?.slot??-1,claimedAt:now
+        });
+      }
+      let duplicates=0;
+      for(const row of entries){
+        if(row.id!==selected && row.status==='pending'){
+          tx.update(row.ref,{status:'duplicate',duplicateOf:conf.edition+'__'+clipId,checkedAt:now});
+          duplicates++;
+        }
+      }
+      return {added:!old.exists,duplicates};
+    });
+    if(result.added) claimsAdded++;
+    legacyDuplicates+=result.duplicates;
+  }
+  console.log(`Bestehende Clips reserviert: ${claimsAdded} neue Reservierungen, ${legacyDuplicates} alte Mehrfacheinreichungen aussortiert.`);
+}
+
 async function verify() {
   const conf=await currentConfig();
+  await backfillClaims(conf); // ältere Einreichungen sofort gegen neue Duplikate schützen
   if (conf.phase !== 'collect') {
     console.log('Verifizierung ausgesetzt: Clip-Sammlung ist geschlossen.');
     return;
@@ -131,6 +191,6 @@ async function grantAdmin() {
   await db.doc('admins/'+uid).set({role:'admin',grantedAt:now});
   console.log('Admin-Rechte für Firebase-UID erteilt:',uid);
 }
-const tasks={verify,top10:tallyTop10,final6:tallyFinal6,seed,'grant-admin':grantAdmin};
+const tasks={verify,backfill:backfillClaims,top10:tallyTop10,final6:tallyFinal6,seed,'grant-admin':grantAdmin};
 if (!tasks[operation]) throw new Error('Unbekannter Befehl: '+operation);
 await tasks[operation]();
